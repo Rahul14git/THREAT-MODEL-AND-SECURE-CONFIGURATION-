@@ -2,7 +2,7 @@
 
 A STRIDE threat model and prioritized hardening plan for a small web application.
 
-**View the report:** https://YOUR-USERNAME.github.io/YOUR-REPO/
+**View the report:** https://rahul14git.github.io/YOUR-REPO/
 
 ## Contents
 - `index.html`: the full report (data-flow diagram with trust boundaries, 13 STRIDE threats ranked by likelihood x impact, phased hardening checklist with verification steps, short explanation)
