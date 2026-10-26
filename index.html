@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Threat Model and Hardening Plan: Crumb &amp; Co. Pre-Order App</title>
+<style>
+:root{--bg:#f6f7f5;--surf:#fff;--ink:#17212b;--mute:#566474;--line:#d5dbd8;--acc:#0b6b5f;--crit:#b3261e;--high:#c4600a;--med:#8a6d00;--critbg:#fbe4e2;--highbg:#fdebd9;--medbg:#f6efc9;--code:#eef1ef;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#11171c;--surf:#182028;--ink:#e6ecef;--mute:#9aa8b4;--line:#2c3844;--acc:#4fc3b2;--crit:#ff8a80;--high:#ffb066;--med:#e6cf5a;--critbg:#3a1c1b;--highbg:#3a2616;--medbg:#38321a;--code:#202a33}}
+:root[data-theme="dark"]{--bg:#11171c;--surf:#182028;--ink:#e6ecef;--mute:#9aa8b4;--line:#2c3844;--acc:#4fc3b2;--crit:#ff8a80;--high:#ffb066;--med:#e6cf5a;--critbg:#3a1c1b;--highbg:#3a2616;--medbg:#38321a;--code:#202a33}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Public Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:980px;margin:0 auto;padding:32px 20px 64px}
+h1{font-size:clamp(1.8rem,4vw,2.6rem);line-height:1.15;margin:0 0 12px;letter-spacing:-.01em}
+h2{font-size:1.45rem;margin:48px 0 12px;padding-top:20px;border-top:2px solid var(--ink)}
+h3{font-size:1.05rem;margin:24px 0 6px}
+p,li{max-width:74ch}
+.lede{font-size:1.1rem;color:var(--mute);max-width:66ch}
+.wrap{overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:var(--surf);margin:12px 0}
+table{border-collapse:collapse;width:100%;min-width:720px;font-size:.92rem}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{background:var(--code);font-weight:600}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;padding:1px 9px;border-radius:99px;font-weight:600;font-size:.82rem;white-space:nowrap}
+.c{background:var(--critbg);color:var(--crit)}.h{background:var(--highbg);color:var(--high)}.m{background:var(--medbg);color:var(--med)}
+.diagram{background:var(--surf);border:1px solid var(--line);border-radius:6px;padding:16px;overflow-x:auto}
+.note{border-left:4px solid var(--acc);padding:4px 16px;background:var(--surf);margin:16px 0}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font:.88em ui-monospace,Menlo,Consolas,monospace}
+ul.chk{list-style:none;padding:0}
+ul.chk li{padding:8px 0 8px 30px;position:relative;border-bottom:1px solid var(--line)}
+ul.chk li::before{content:"";position:absolute;left:2px;top:13px;width:14px;height:14px;border:2px solid var(--acc);border-radius:3px}
+.how{color:var(--mute);display:block;font-size:.9rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+.box{background:var(--surf);border:1px solid var(--line);border-radius:6px;padding:12px 16px}
+.box b{display:block}
+</style>
+</head>
+<body>
+<main>
+<h1>Threat model and hardening plan: Crumb &amp; Co. pre-order app</h1>
+<p class="lede">A small bakery’s website where customers order cakes and pick a pickup slot, and the baker manages orders. I used STRIDE to find threats, scored each by likelihood × impact (1–5 each), and turned the results into a verifiable hardening checklist.</p>
+
+<h2>1. Scope and assumptions</h2>
+<ul>
+<li><b>System:</b> a single web app (React front end, Node/Express API, PostgreSQL) on a cloud host, with an object store for reference photos.</li>
+<li><b>Users:</b> anonymous visitors, registered customers, and one to three admin staff (the baker, a helper).</li>
+<li><b>Third parties:</b> Stripe (card payments, never touches our servers directly) and an email provider (order confirmations).</li>
+<li><b>Out of scope:</b> physical security of the shop, the staff’s personal devices, and the cloud provider’s own infrastructure.</li>
+<li><b>Attackers considered:</b> opportunistic bots and credential stuffers, a curious or malicious customer, and a competitor or disgruntled ex-staff member. Not considered: nation-state actors.</li>
+</ul>
+
+<h2>2. Assets worth protecting</h2>
+<div class="grid">
+<div class="box"><b>Customer PII</b>Names, emails, phone numbers, addresses, allergy notes. Leak means privacy harm and legal exposure.</div>
+<div class="box"><b>Admin accounts</b>Full control of orders, prices, refunds. The highest-value target.</div>
+<div class="box"><b>Payment integrity</b>Orders must only be marked paid when Stripe confirms. Card data stays with Stripe.</div>
+<div class="box"><b>Secrets</b>Stripe keys, webhook secret, DB password, email API key.</div>
+<div class="box"><b>Availability</b>Pickup slots and the site itself. A weekend outage means lost revenue.</div>
+<div class="box"><b>Reputation</b>Wrong allergy info or fake orders harm trust and can harm people.</div>
+</div>
+
+<h2>3. Diagram: users, data flows, trust boundaries, dependencies</h2>
+<p>Each subgraph is a trust boundary. Anything crossing a boundary must be authenticated, validated, or encrypted. Numbers match the flows listed below the diagram.</p>
+<div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  subgraph B1["Boundary 1: Untrusted internet"]
+    C["Customer browser"]
+    A["Admin browser"]
+    X["Attacker / bots"]
+  end
+  subgraph B2["Boundary 2: Our hosting environment"]
+    W["Web app and API"]
+    DB[("PostgreSQL: users, orders, PII")]
+    S[("Object store: reference photos")]
+    L["Logs and secrets store"]
+  end
+  subgraph B3["Boundary 3: Third-party services"]
+    P["Stripe payments"]
+    E["Email provider"]
+  end
+  C -->|"1 HTTPS: browse, login, order"| W
+  A -->|"2 HTTPS: manage orders"| W
+  X -.->|"3 attacks"| W
+  W -->|"4 SQL"| DB
+  W -->|"5 upload / read"| S
+  W -->|"6 create payment session"| P
+  P -->|"7 webhook: payment result"| W
+  W -->|"8 confirmation email"| E
+  W -->|"9 write logs, read secrets"| L
+</pre>
+</div>
+<div class="wrap"><table>
+<thead><tr><th>Flow</th><th>Data</th><th>Main concern</th></tr></thead>
+<tbody>
+<tr><td>1, 2</td><td>Credentials, session cookie, order details, PII</td><td>Authentication, authorization, input validation, TLS</td></tr>
+<tr><td>3</td><td>Malicious requests</td><td>Rate limiting, WAF-style filtering</td></tr>
+<tr><td>4</td><td>All persistent data</td><td>Injection, DB not reachable from the internet</td></tr>
+<tr><td>5</td><td>User-supplied files</td><td>Malicious uploads, public bucket exposure</td></tr>
+<tr><td>6, 7</td><td>Amount, order ID, payment status</td><td>Price tampering, forged webhooks</td></tr>
+<tr><td>8</td><td>Email address, order summary</td><td>Abuse as a spam relay, PII in email</td></tr>
+<tr><td>9</td><td>Logs, API keys</td><td>Secret leakage, missing audit trail</td></tr>
+</tbody></table></div>
+
+<h2>4. Threats (STRIDE) and risk ranking</h2>
+<p>Likelihood (L) and Impact (I) are scored 1 to 5 for this specific app. Risk = L × I. Critical is 15 or more, High is 12 to 14, Medium is 9 to 11. Sorted highest first.</p>
+<div class="wrap"><table>
+<thead><tr><th>ID</th><th>STRIDE</th><th>Abuse case</th><th>L</th><th>I</th><th>Risk</th></tr></thead>
+<tbody>
+<tr><td>T1</td><td>Spoofing</td><td>Credential stuffing or password guessing against the admin login (reused passwords, no MFA, no lockout) gives full control.</td><td>4</td><td>5</td><td><span class="tag c">20 Critical</span></td></tr>
+<tr><td>T2</td><td>Elevation / Info disclosure</td><td>IDOR: a customer changes <code>/orders/1042</code> to <code>/orders/1043</code> and reads someone else’s address and allergy notes.</td><td>4</td><td>4</td><td><span class="tag c">16 Critical</span></td></tr>
+<tr><td>T3</td><td>Tampering</td><td>SQL injection through the order search or notes field dumps or alters the database.</td><td>3</td><td>5</td><td><span class="tag c">15 Critical</span></td></tr>
+<tr><td>T4</td><td>Info disclosure</td><td>Stripe or DB secrets committed to the repo, shown in error pages, or written to logs.</td><td>3</td><td>5</td><td><span class="tag c">15 Critical</span></td></tr>
+<tr><td>T5</td><td>Tampering</td><td>Client sends a modified price or quantity at checkout (for example a £0.01 cake) and the server trusts it.</td><td>3</td><td>4</td><td><span class="tag h">12 High</span></td></tr>
+<tr><td>T6</td><td>Spoofing / Tampering</td><td>Attacker posts a fake “payment succeeded” webhook so orders are marked paid without paying.</td><td>3</td><td>4</td><td><span class="tag h">12 High</span></td></tr>
+<tr><td>T7</td><td>Elevation of privilege</td><td>Stored XSS in the order-notes field runs in the admin dashboard and steals the admin session.</td><td>3</td><td>4</td><td><span class="tag h">12 High</span></td></tr>
+<tr><td>T8</td><td>Denial of service</td><td>Bots book every pickup slot with fake orders, or trigger thousands of confirmation emails (cost and blocklisting).</td><td>4</td><td>3</td><td><span class="tag h">12 High</span></td></tr>
+<tr><td>T9</td><td>Tampering (supply chain)</td><td>A vulnerable or malicious npm dependency gives code execution on the server.</td><td>4</td><td>3</td><td><span class="tag h">12 High</span></td></tr>
+<tr><td>T10</td><td>Info disclosure</td><td>Database reachable from the internet, or backups stored unencrypted and unrestricted.</td><td>2</td><td>5</td><td><span class="tag m">10 Medium</span></td></tr>
+<tr><td>T11</td><td>Info disclosure</td><td>Public photo bucket exposes customer images; verbose stack traces reveal internals.</td><td>3</td><td>3</td><td><span class="tag m">9 Medium</span></td></tr>
+<tr><td>T12</td><td>Repudiation</td><td>No audit log, so a staff member can issue refunds or change prices and nobody can prove who did it.</td><td>3</td><td>3</td><td><span class="tag m">9 Medium</span></td></tr>
+<tr><td>T13</td><td>Tampering</td><td>Upload of a disguised script or oversized file through the reference-photo form.</td><td>3</td><td>3</td><td><span class="tag m">9 Medium</span></td></tr>
+</tbody></table></div>
+<div class="note"><b>Why this order?</b> Admin takeover (T1) and cross-customer data exposure (T2) hurt the most people with the least attacker effort. Injection and leaked secrets (T3, T4) are rarer but catastrophic. Business-logic issues (T5, T6) cost money directly and are cheap to fix, so they follow immediately.</div>
+
+<h2>5. Prioritized hardening plan with verification</h2>
+<p>Each item names the threat it addresses and a concrete check that proves the fix works. Do phase 1 first.</p>
+
+<h3>Phase 1: Critical (do now)</h3>
+<ul class="chk">
+<li><b>Require MFA for admins, add login rate limiting and lockout; hash passwords with Argon2id or bcrypt.</b> (T1)<span class="how">Verify: 10 wrong passwords in a minute returns HTTP 429; an admin account without MFA cannot reach <code>/admin</code>; check the DB stores no plaintext hashes like MD5.</span></li>
+<li><b>Enforce object-level authorization on every order and profile endpoint; use unguessable IDs (UUIDs).</b> (T2)<span class="how">Verify: an automated test logs in as customer A and requests customer B’s order and expects 403 or 404. Add this test to CI.</span></li>
+<li><b>Use parameterized queries or an ORM everywhere; validate input types and lengths.</b> (T3)<span class="how">Verify: searching <code>' OR '1'='1</code> returns no extra rows; search the code for string-concatenated SQL; run OWASP ZAP’s active scan against staging with zero injection findings.</span></li>
+<li><b>Move secrets to environment variables or a secrets manager; rotate anything ever committed; turn off debug errors in production.</b> (T4)<span class="how">Verify: run <code>gitleaks detect</code> across full git history with no findings; trigger an error and confirm the response is generic with no stack trace.</span></li>
+</ul>
+
+<h3>Phase 2: High (this month)</h3>
+<ul class="chk">
+<li><b>Recalculate price and totals on the server from the product catalog; ignore client-sent amounts.</b> (T5)<span class="how">Verify: intercept the checkout request with a proxy, change the price, and confirm the server charges the catalog price.</span></li>
+<li><b>Verify the Stripe webhook signature and check the amount and order ID before marking paid.</b> (T6)<span class="how">Verify: a <code>curl</code> POST to the webhook URL with no or a wrong signature returns 400 and the order stays unpaid.</span></li>
+<li><b>Escape all output, sanitize notes, and set a strict Content-Security-Policy; mark cookies HttpOnly, Secure, SameSite=Lax.</b> (T7)<span class="how">Verify: submit <code>&lt;img src=x onerror=alert(1)&gt;</code> as a note and confirm it displays as text in the admin view; check cookie flags in browser dev tools.</span></li>
+<li><b>Add rate limits and CAPTCHA to checkout and slot booking; cap emails per address per hour; hold unpaid slots for 10 minutes only.</b> (T8)<span class="how">Verify: a script making 50 orders from one IP is throttled; unpaid reservations release automatically.</span></li>
+<li><b>Enable Dependabot or <code>npm audit</code> in CI, commit the lockfile, and block merges on high-severity findings.</b> (T9)<span class="how">Verify: CI fails when a known-vulnerable package version is introduced on a test branch.</span></li>
+</ul>
+
+<h3>Phase 3: Medium (next quarter)</h3>
+<ul class="chk">
+<li><b>Place the DB in a private network with no public IP; encrypt backups and restrict who can read them.</b> (T10)<span class="how">Verify: a port scan of the DB host from outside shows 5432 closed; perform a test restore from backup and confirm access is limited to named roles.</span></li>
+<li><b>Make the photo bucket private and serve files through short-lived signed URLs.</b> (T11)<span class="how">Verify: opening an object URL without a signature returns 403.</span></li>
+<li><b>Write an append-only audit log for logins, refunds, price changes, and role changes, including user ID and time.</b> (T12)<span class="how">Verify: perform a test refund and find one log line with who, what, and when; confirm admins cannot edit log entries.</span></li>
+<li><b>Validate uploads by real file type and size, re-encode images, and store them outside the web root with random names.</b> (T13)<span class="how">Verify: uploading a <code>.php</code> or renamed <code>.exe</code> file is rejected; a 50 MB file is refused.</span></li>
+</ul>
+
+<h3>Baseline secure configuration (quick wins)</h3>
+<ul class="chk">
+<li><b>HTTPS only with HSTS; set <code>X-Content-Type-Options</code>, <code>Referrer-Policy</code>, and <code>frame-ancestors</code> in CSP.</b><span class="how">Verify: <code>curl -I https://yoursite</code> shows the headers; an SSL Labs or Mozilla Observatory scan grades A or higher.</span></li>
+<li><b>Least-privilege DB user for the app (no DROP or superuser rights); separate staging and production credentials.</b><span class="how">Verify: connect as the app user and confirm <code>DROP TABLE</code> fails.</span></li>
+<li><b>Alert on spikes in failed logins, 5xx errors, and Stripe webhook failures.</b><span class="how">Verify: simulate each event and confirm an alert reaches the owner.</span></li>
+</ul>
+
+<h2>6. Short explanation</h2>
+<p>I started by deciding what an attacker would actually want from a small bakery app: admin access, other customers’ personal details, and free cakes. I drew the system with three trust boundaries and nine data flows, then walked each flow through the six STRIDE categories to find abuse cases. Scoring likelihood and impact separately kept the ranking honest, so cheap, high-impact fixes such as MFA, per-user access checks, and server-side pricing come first, while rarer or lower-impact items wait. Every fix has a test that can be run, which turns the plan from advice into something that can be checked off.</p>
+<p><b>Limitations:</b> scores are judgment-based estimates for this assumed design, not measurements. A real review would confirm them against the actual code and hosting setup and revisit the model whenever a new feature, such as delivery or loyalty accounts, adds new data flows.</p>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script>
+try{
+  var dark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
+  if(window.mermaid){mermaid.initialize({startOnLoad:true,theme:dark?'dark':'neutral',flowchart:{useMaxWidth:false}});}
+}catch(e){}
+</script>
+</body>
+</html>
