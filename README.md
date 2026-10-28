@@ -1,14 +1,38 @@
-# Threat Model and Secure Configuration: Crumb & Co. Pre-Order App
 
-A STRIDE threat model and prioritized hardening plan for a small web application.
+# Secure Authentication Lab
 
-**View the report:** https://rahul14git.github.io/YOUR-REPO/
+## Overview
+A beginner-friendly authentication service built with Python and Flask.
 
-## Contents
-- `index.html`: the full report (data-flow diagram with trust boundaries, 13 STRIDE threats ranked by likelihood x impact, phased hardening checklist with verification steps, short explanation)
+## Security Features
+- Password hashing using Werkzeug
+- Username and password validation
+- Login and registration rate limiting
+- CSRF protection for form submissions
+- HTTP-only session cookies
+- Parameterized SQLite queries
+- Login-required dashboard and logout
 
-## Method
-1. Identified assets, users, trust boundaries, and external dependencies.
-2. Applied STRIDE to each data flow.
-3. Scored each threat on likelihood (1-5) and impact (1-5); risk = L x I.
-4. Wrote a hardening checklist where every fix has a verification step.
+## Technologies
+- Python
+- Flask
+- SQLite
+- Flask-WTF
+- Flask-Limiter
+
+## Run Locally
+1. Install Python 3.10 or newer.
+2. Install dependencies:
+
+   pip install -r requirements.txt
+
+3. Start the application:
+
+   python app.py
+
+4. Open http://127.0.0.1:5000 in your browser.
+
+## Security Notes
+This project is an educational demonstration, not a production-ready
+authentication system. Production deployment requires a stable secret
+key, HTTPS, persistent rate limiting, and additional security testing.
