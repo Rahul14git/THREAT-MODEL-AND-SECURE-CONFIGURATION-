@@ -30,7 +30,7 @@ A beginner-friendly authentication service built with Python and Flask.
 
    python app.py
 
-4. Open http://127.0.0.1:5000 in your browser.
+4. Open http://127.0.0.1:5000/login in your browser.
 
 ## Security Notes
 This project is an educational demonstration, not a production-ready
